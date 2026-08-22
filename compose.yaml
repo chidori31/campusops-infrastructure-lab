@@ -69,6 +69,75 @@ services:
       - campusops-network
 
 
+  test-db:
+    image: postgres:18-alpine
+    container_name: campusops-test-db
+
+    profiles:
+      - test
+
+    environment:
+      POSTGRES_DB: campusops_test
+      POSTGRES_USER: campusops_test
+      POSTGRES_PASSWORD: campusops_test_password
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U campusops_test -d campusops_test"
+        ]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+    networks:
+      - campusops-network
+
+
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    profiles:
+      - test
+
+    environment:
+      APP_NAME: CampusOps Test
+      APP_ENV: testing
+      DEBUG: "false"
+
+      POSTGRES_HOST: test-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: campusops_test
+      POSTGRES_USER: campusops_test
+      POSTGRES_PASSWORD: campusops_test_password
+
+      AD_ENABLED: "false"
+      AD_SERVER: 192.168.56.10
+      AD_PORT: "389"
+      AD_DOMAIN: corp.lab
+      AD_BASE_DN: DC=corp,DC=lab
+      AD_BIND_USER: svc-campusops@corp.lab
+      AD_BIND_PASSWORD: test_only
+
+    depends_on:
+      test-db:
+        condition: service_healthy
+
+    command:
+      [
+        "sh",
+        "-c",
+        "alembic upgrade head && pytest -v --cov=app --cov-report=term-missing"
+      ]
+
+    networks:
+      - campusops-network
+
+
 networks:
   campusops-network:
     name: campusops-network
