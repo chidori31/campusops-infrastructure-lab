@@ -4,6 +4,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.db import SessionLocal
 from app.routers import (
+    ad,
     devices,
     employees,
     tickets,
@@ -12,14 +13,18 @@ from app.routers import (
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.2.0",
+    version="0.3.0",
     description=(
         "CampusOps — laboratory IT operations service "
-        "using Docker, PostgreSQL, pytest, "
-        "Active Directory and Zabbix."
+        "demonstrating Docker, PostgreSQL, pytest, "
+        "Active Directory/LDAP and Zabbix monitoring."
     ),
 )
 
+
+# =========================================================
+# ROUTERS
+# =========================================================
 
 app.include_router(
     employees.router
@@ -33,14 +38,27 @@ app.include_router(
     tickets.router
 )
 
+app.include_router(
+    ad.router
+)
+
+
+# =========================================================
+# SYSTEM ENDPOINTS
+# =========================================================
 
 @app.get(
     "/",
     tags=["System"],
 )
 def root() -> dict[str, str]:
+    """
+    Basic application information.
+    """
+
     return {
         "name": settings.app_name,
+        "version": "0.3.0",
         "environment": settings.app_env,
         "docs": "/docs",
     }
@@ -51,6 +69,14 @@ def root() -> dict[str, str]:
     tags=["System"],
 )
 def health() -> dict[str, str]:
+    """
+    Liveness probe.
+
+    Confirms that the FastAPI process is running.
+
+    Used by Docker health checks and Zabbix.
+    """
+
     return {
         "status": "ok",
     }
@@ -61,6 +87,13 @@ def health() -> dict[str, str]:
     tags=["System"],
 )
 def readiness() -> dict[str, str]:
+    """
+    Readiness probe.
+
+    Confirms that the application can communicate
+    with PostgreSQL.
+    """
+
     try:
         with SessionLocal() as db:
             db.execute(

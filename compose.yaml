@@ -1,6 +1,9 @@
 name: campusops
 
 services:
+  # =========================================================
+  # MAIN POSTGRESQL DATABASE
+  # =========================================================
   db:
     image: postgres:18-alpine
     container_name: campusops-db
@@ -33,6 +36,9 @@ services:
       - campusops-network
 
 
+  # =========================================================
+  # FASTAPI APPLICATION
+  # =========================================================
   api:
     build:
       context: .
@@ -69,6 +75,12 @@ services:
       - campusops-network
 
 
+  # =========================================================
+  # TEST POSTGRESQL DATABASE
+  #
+  # Starts only with:
+  # docker compose --profile test ...
+  # =========================================================
   test-db:
     image: postgres:18-alpine
     container_name: campusops-test-db
@@ -96,6 +108,12 @@ services:
       - campusops-network
 
 
+  # =========================================================
+  # PYTEST
+  #
+  # Uses isolated PostgreSQL test database.
+  # Does not touch the main campusops database.
+  # =========================================================
   tests:
     build:
       context: .
@@ -116,7 +134,7 @@ services:
       POSTGRES_PASSWORD: campusops_test_password
 
       AD_ENABLED: "false"
-      AD_SERVER: 192.168.56.10
+      AD_SERVER: ad-dc
       AD_PORT: "389"
       AD_DOMAIN: corp.lab
       AD_BASE_DN: DC=corp,DC=lab
@@ -138,11 +156,190 @@ services:
       - campusops-network
 
 
+  # =========================================================
+  # SAMBA ACTIVE DIRECTORY DOMAIN CONTROLLER
+  #
+  # Domain:
+  # CORP.LAB
+  #
+  # NetBIOS:
+  # CORP
+  #
+  # Starts with profile:
+  # docker compose --profile infra up -d
+  # =========================================================
+  ad-dc:
+    build:
+      context: ./infra/active-directory
+      dockerfile: Dockerfile
+
+    container_name: campusops-ad-dc
+
+    hostname: dc01
+    domainname: corp.lab
+
+    privileged: true
+
+    profiles:
+      - infra
+
+    environment:
+      AD_REALM: CORP.LAB
+      AD_NETBIOS_DOMAIN: CORP
+
+      AD_ADMIN_PASSWORD: ${AD_ADMIN_PASSWORD}
+      AD_SERVICE_PASSWORD: ${AD_SERVICE_PASSWORD}
+      AD_USER_PASSWORD: ${AD_USER_PASSWORD}
+
+    volumes:
+      - campusops_ad_lib:/var/lib/samba
+      - campusops_ad_cache:/var/cache/samba
+      - campusops_ad_config:/etc/samba
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "ldapsearch -x -H ldap://127.0.0.1:389 -D 'svc-campusops@corp.lab' -w \"$${AD_SERVICE_PASSWORD}\" -b 'DC=corp,DC=lab' -s base dn >/dev/null 2>&1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+    restart: unless-stopped
+
+    networks:
+      - campusops-network
+
+
+  # =========================================================
+  # ZABBIX DATABASE
+  #
+  # Separate PostgreSQL database for Zabbix itself.
+  # =========================================================
+  zabbix-db:
+    image: postgres:17-alpine
+    container_name: campusops-zabbix-db
+
+    profiles:
+      - infra
+
+    environment:
+      POSTGRES_DB: zabbix
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: ${ZABBIX_DB_PASSWORD}
+
+    volumes:
+      - campusops_zabbix_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U zabbix -d zabbix"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+    restart: unless-stopped
+
+    networks:
+      - campusops-network
+
+
+  # =========================================================
+  # ZABBIX SERVER
+  # =========================================================
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:alpine-7.4-latest
+    container_name: campusops-zabbix-server
+
+    profiles:
+      - infra
+
+    environment:
+      DB_SERVER_HOST: zabbix-db
+      POSTGRES_DB: zabbix
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: ${ZABBIX_DB_PASSWORD}
+
+    depends_on:
+      zabbix-db:
+        condition: service_healthy
+
+    ports:
+      - "10051:10051"
+
+    restart: unless-stopped
+
+    networks:
+      - campusops-network
+
+
+  # =========================================================
+  # ZABBIX WEB UI
+  #
+  # http://localhost:8080
+  # =========================================================
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:alpine-7.4-latest
+    container_name: campusops-zabbix-web
+
+    profiles:
+      - infra
+
+    environment:
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_SERVER_PORT: "10051"
+
+      DB_SERVER_HOST: zabbix-db
+      POSTGRES_DB: zabbix
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: ${ZABBIX_DB_PASSWORD}
+
+      PHP_TZ: Europe/Moscow
+
+    depends_on:
+      zabbix-db:
+        condition: service_healthy
+      zabbix-server:
+        condition: service_started
+
+    ports:
+      - "8080:8080"
+
+    restart: unless-stopped
+
+    networks:
+      - campusops-network
+
+
+# =========================================================
+# NETWORK
+# =========================================================
 networks:
   campusops-network:
     name: campusops-network
 
 
+# =========================================================
+# PERSISTENT VOLUMES
+# =========================================================
 volumes:
   campusops_postgres_data:
     name: campusops-postgres-data
+
+  campusops_ad_lib:
+    name: campusops-ad-lib
+
+  campusops_ad_cache:
+    name: campusops-ad-cache
+
+  campusops_ad_config:
+    name: campusops-ad-config
+
+  campusops_zabbix_data:
+    name: campusops-zabbix-data
